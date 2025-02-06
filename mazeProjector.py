@@ -1,158 +1,194 @@
-import pygame
+#!/usr/bin/env python3
+"""
+Maze Drawer
+-----------
+This script reads a maze from an ASCII text file (formatted like the sample provided),
+parses it into a grid of MazeCells (each with boolean walls: north, east, south, west,
+and optionally a start (S) or goal (G) marker), and then draws the maze using Pillow.
+User input is requested for:
+  - The filename of the maze file.
+  - The cell side length in pixels.
+  - The wall thickness in pixels.
+
+The ASCII file format is expected to have alternating horizontal and vertical wall rows.
+For example, for a maze with R rows and C columns, the file has 2*R+1 lines.
+- The first line is a horizontal line that begins with an "o" and then has segments of either
+  "   " (no wall) or "---" (wall present) between successive "o" characters.
+- The next line begins with "|" (or a space) and then, for each cell, has a 3‑character interior
+  (which may contain S or G) with vertical walls indicated by "|" between cells.
+- These two types of lines alternate, and the last line gives the southern walls.
+"""
+
+from PIL import Image, ImageDraw
 import sys
 
-# Define a simple MazeCell class to hold wall information and any marker.
+# Define a MazeCell class to store wall information and cell marker (start/goal)
 class MazeCell:
     def __init__(self):
-        self.north = False
-        self.south = False
-        self.east = False
-        self.west = False
-        self.marker = None  # e.g., "S" or "G"
+        self.north = False  # wall on the north side
+        self.east  = False  # wall on the east side
+        self.south = False  # wall on the south side
+        self.west  = False  # wall on the west side
+        self.start = False  # True if this cell is marked as the start ('S')
+        self.goal  = False  # True if this cell is marked as the goal ('G')
 
-def parse_ascii_maze(filename):
+def parse_maze_file(filename):
     """
-    Parses an ASCII maze file formatted as follows:
-    
-    - The file should have 2*rows + 1 lines (for a 16×16 maze, 33 lines).
-    - Even-indexed lines (0, 2, 4, …) are horizontal boundary lines.
-      These lines consist of alternating "o" (vertices) and 3-character segments.
-      A segment of '---' indicates a wall; a segment of '   ' (three spaces) indicates no wall.
-    - Odd-indexed lines are the vertical wall lines.
-      They have a pattern of 4-character blocks: the first and fourth characters are
-      vertical boundaries ('|' indicates a wall, a space indicates no wall), and the two
-      middle characters (or three characters if you include the extra space) represent
-      the interior of the cell. If a cell interior contains an 'S' or 'G' (possibly padded by spaces),
-      that marker is recorded.
-      
-    Returns a 16×16 grid (list of lists) of MazeCell objects.
+    Parses the maze text file and returns a 2D list of MazeCells along with the maze dimensions.
+    The file is assumed to have 2*maze_rows+1 lines.
     """
-    rows, cols = 16, 16
-    expected_lines = 2 * rows + 1  # 33 lines for a 16x16 maze
-
-    with open(filename, 'r') as f:
-        # Remove newline characters.
-        lines = [line.rstrip("\n") for line in f.readlines()]
-
-    if len(lines) < expected_lines:
-        print("Error: Maze file has fewer than expected lines.")
+    try:
+        with open(filename, 'r') as file:
+            # Remove newline characters from each line
+            lines = [line.rstrip('\n') for line in file if line.strip() != '']
+    except FileNotFoundError:
+        print(f"Error: File '{filename}' not found.")
         sys.exit(1)
 
-    # Create the grid of MazeCell objects.
-    grid = [[MazeCell() for _ in range(cols)] for _ in range(rows)]
-    
-    # Each horizontal boundary line is expected to be 4*cols + 1 characters long.
-    # For each cell, we will extract:
-    # - North wall from the horizontal line at index (2*r)
-    # - South wall from the horizontal line at index (2*r + 2)
-    # - West and East walls from the vertical line at index (2*r + 1)
-    # - Marker from the interior substring of the vertical line.
-    for r in range(rows):
-        top_line = lines[2 * r]
+    total_lines = len(lines)
+    if total_lines % 2 == 0:
+        raise ValueError("Maze file format error: Expected an odd number of lines.")
+
+    maze_rows = (total_lines - 1) // 2
+    # The first horizontal line (which starts with 'o') determines the number of columns.
+    # Its length should be: maze_cols * 4 + 1 (each cell has 3 chars for the wall segment plus an "o")
+    maze_cols = (len(lines[0]) - 1) // 4
+
+    # Create the maze grid (2D list of MazeCells)
+    maze = [[MazeCell() for _ in range(maze_cols)] for _ in range(maze_rows)]
+
+    # For each maze row, parse the horizontal (north/south) and vertical (west/east) wall lines.
+    for r in range(maze_rows):
+        # Parse the horizontal line above the row (north walls for row r)
+        horizontal_top = lines[2 * r]
+        for c in range(maze_cols):
+            # Each cell segment starts at index c*4+1 and spans 3 characters.
+            segment = horizontal_top[c * 4 + 1 : c * 4 + 4]
+            maze[r][c].north = (segment == '---')
+
+        # Parse the vertical line that contains cell interiors and west/east walls for row r.
         vertical_line = lines[2 * r + 1]
-        bottom_line = lines[2 * r + 2] if (2 * r + 2) < len(lines) else None
+        for c in range(maze_cols):
+            # The west wall character for cell (r, c) is at index c*4.
+            west_char = vertical_line[c * 4]
+            # The cell interior is 3 characters long.
+            cell_interior = vertical_line[c * 4 + 1 : c * 4 + 4]
+            # The east wall character for cell (r, c) is right after the interior.
+            east_char = vertical_line[c * 4 + 4]
+            maze[r][c].west = (west_char == '|')
+            maze[r][c].east = (east_char == '|')
 
-        for c in range(cols):
-            # Calculate the starting index of the 4-character block for cell (r, c).
-            block_start = 4 * c
-            # For horizontal segments, the wall indicator is found in the substring starting at index (block_start + 1) with length 3.
-            segment_top = top_line[block_start + 1: block_start + 4]
-            if segment_top == "---":
-                grid[r][c].north = True
-            if bottom_line:
-                segment_bottom = bottom_line[block_start + 1: block_start + 4]
-                if segment_bottom == "---":
-                    grid[r][c].south = True
+            # Check the interior for markers ('S' for start, 'G' for goal)
+            cell_marker = cell_interior.strip()
+            if cell_marker == 'S':
+                maze[r][c].start = True
+            elif cell_marker == 'G':
+                maze[r][c].goal = True
 
-            # For vertical walls, the left (west) wall is at the beginning of the block.
-            if vertical_line[block_start] == '|':
-                grid[r][c].west = True
-            # The right (east) wall is at index block_start + 4.
-            if vertical_line[block_start + 4] == '|':
-                grid[r][c].east = True
+        # Parse the horizontal line below the row (south walls for row r)
+        horizontal_bottom = lines[2 * r + 2]
+        for c in range(maze_cols):
+            segment = horizontal_bottom[c * 4 + 1 : c * 4 + 4]
+            maze[r][c].south = (segment == '---')
 
-            # The interior of the cell is in the substring from (block_start + 1) to (block_start + 4).
-            interior = vertical_line[block_start + 1: block_start + 4].strip()
-            if interior in ['S', 'G']:
-                grid[r][c].marker = interior
+    return maze, maze_rows, maze_cols
 
-    return grid
-
-def draw_maze(screen, grid, cell_size):
+def draw_maze(maze, maze_rows, maze_cols, cell_size, wall_thickness):
     """
-    Draws the maze onto the Pygame screen.
-    For each cell, if a wall exists on a side, a line is drawn.
-    If the cell contains a marker (S or G), it is rendered in the cell's center.
+    Draws the maze using Pillow.
+    - maze: 2D list of MazeCells.
+    - maze_rows, maze_cols: dimensions of the maze.
+    - cell_size: side length of each cell in pixels.
+    - wall_thickness: thickness of walls in pixels.
+    
+    Returns a Pillow Image object.
     """
-    wall_color = (255, 255, 255)    # White for walls.
-    marker_color = (255, 0, 0)      # Red for markers.
-    bg_color = (0, 0, 0)            # Black background.
-    
-    screen.fill(bg_color)
-    rows = len(grid)
-    cols = len(grid[0])
-    
-    # Draw walls for each cell.
-    for r in range(rows):
-        for c in range(cols):
+    # Calculate image dimensions. Add wall_thickness to ensure outer walls are fully drawn.
+    img_width = maze_cols * cell_size + wall_thickness
+    img_height = maze_rows * cell_size + wall_thickness
+    image = Image.new("RGB", (img_width, img_height), "white")
+    draw = ImageDraw.Draw(image)
+
+    # First, fill the cells that are marked as start or goal.
+    # (You can change the colors as desired.)
+    for r in range(maze_rows):
+        for c in range(maze_cols):
+            x = c * cell_size
+            y = r * cell_size
+            if maze[r][c].start:
+                # Fill start cell with light green.
+                draw.rectangle(
+                    [x + wall_thickness, y + wall_thickness, x + cell_size, y + cell_size],
+                    fill="lightgreen"
+                )
+            elif maze[r][c].goal:
+                # Fill goal cell with light coral.
+                draw.rectangle(
+                    [x + wall_thickness, y + wall_thickness, x + cell_size, y + cell_size],
+                    fill="lightcoral"
+                )
+
+    # Now, draw the walls for each cell.
+    for r in range(maze_rows):
+        for c in range(maze_cols):
             x = c * cell_size
             y = r * cell_size
 
-            # Draw north wall.
-            if grid[r][c].north:
-                pygame.draw.line(screen, wall_color, (x, y), (x + cell_size, y), 2)
-            # Draw south wall.
-            if grid[r][c].south:
-                pygame.draw.line(screen, wall_color, (x, y + cell_size), (x + cell_size, y + cell_size), 2)
-            # Draw west wall.
-            if grid[r][c].west:
-                pygame.draw.line(screen, wall_color, (x, y), (x, y + cell_size), 2)
-            # Draw east wall.
-            if grid[r][c].east:
-                pygame.draw.line(screen, wall_color, (x + cell_size, y), (x + cell_size, y + cell_size), 2)
-            
-            # If there is a marker, draw it centered in the cell.
-            if grid[r][c].marker:
-                font = pygame.font.SysFont("Arial", cell_size // 2)
-                text_surface = font.render(grid[r][c].marker, True, marker_color)
-                text_rect = text_surface.get_rect(center=(x + cell_size/2, y + cell_size/2))
-                screen.blit(text_surface, text_rect)
-    
-    pygame.display.flip()
+            # Draw the north wall
+            if maze[r][c].north:
+                draw.line(
+                    [(x, y), (x + cell_size, y)],
+                    fill="black",
+                    width=wall_thickness
+                )
+            # Draw the west wall
+            if maze[r][c].west:
+                draw.line(
+                    [(x, y), (x, y + cell_size)],
+                    fill="black",
+                    width=wall_thickness
+                )
+            # Draw the east wall
+            if maze[r][c].east:
+                draw.line(
+                    [(x + cell_size, y), (x + cell_size, y + cell_size)],
+                    fill="black",
+                    width=wall_thickness
+                )
+            # Draw the south wall
+            if maze[r][c].south:
+                draw.line(
+                    [(x, y + cell_size), (x + cell_size, y + cell_size)],
+                    fill="black",
+                    width=wall_thickness
+                )
+
+    return image
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python ascii_maze_projector.py <maze_file.txt> <cell_size>")
-        print("Example: python ascii_maze_projector.py maze.txt 40")
+    # Ask the user for the maze text file name.
+    maze_filename = input("Enter the maze file name (e.g., maze.txt): ").strip()
+    # Ask for drawing parameters.
+    try:
+        cell_size = int(input("Enter cell side length in pixels (e.g., 40): ").strip())
+        wall_thickness = int(input("Enter wall thickness in pixels (e.g., 4): ").strip())
+    except ValueError:
+        print("Invalid number entered. Please enter integer values.")
         sys.exit(1)
 
-    maze_file = sys.argv[1]
-    try:
-        cell_size = int(sys.argv[2])
-    except ValueError:
-        print("Error: <cell_size> must be an integer.")
-        sys.exit(1)
-    
-    # Parse the ASCII maze into a grid of MazeCell objects.
-    grid = parse_ascii_maze(maze_file)
-    
-    pygame.init()
-    window_size = (16 * cell_size, 16 * cell_size)
-    screen = pygame.display.set_mode(window_size)
-    pygame.display.set_caption("ASCII Maze Projector")
-    
-    clock = pygame.time.Clock()
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-        
-        draw_maze(screen, grid, cell_size)
-        clock.tick(30)
-    
-    pygame.quit()
-    sys.exit()
+    # Parse the maze file.
+    maze, maze_rows, maze_cols = parse_maze_file(maze_filename)
+    print(f"Maze parsed: {maze_rows} rows x {maze_cols} columns.")
+
+    # Draw the maze.
+    maze_image = draw_maze(maze, maze_rows, maze_cols, cell_size, wall_thickness)
+
+    # Save the image.
+    output_filename = "maze_output.png"
+    maze_image.save(output_filename)
+    print(f"Maze drawn and saved as '{output_filename}'.")
+    # Optionally, display the image.
+    maze_image.show()
 
 if __name__ == "__main__":
     main()
